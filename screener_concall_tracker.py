@@ -508,10 +508,22 @@ def create_calendar_events(concalls, watchlists):
 def send_email_notification(success, total_concalls, phones_extracted, sheet_updated, events_created, error_msg=None):
     """Send email notification about scraper run"""
     
-    if not EMAIL_ENABLED or not EMAIL_USERNAME or not EMAIL_PASSWORD:
+    # Debug print to verify secrets are loaded
+    print(f"📧 Email Configuration Check:")
+    print(f"   EMAIL_ENABLED: {EMAIL_ENABLED}")
+    print(f"   EMAIL_USERNAME: {'Set' if EMAIL_USERNAME else 'NOT SET'}")
+    print(f"   EMAIL_PASSWORD: {'Set' if EMAIL_PASSWORD else 'NOT SET'}")
+    print(f"   EMAIL_TO: {EMAIL_TO if EMAIL_TO else 'NOT SET'}")
+    
+    if not EMAIL_ENABLED:
+        print("   ⚠️  Email is DISABLED (EMAIL_ENABLED is not true)")
         return
     
-    print("📧 Sending email notification...")
+    if not EMAIL_USERNAME or not EMAIL_PASSWORD:
+        print("   ⚠️  Email credentials not set properly")
+        return
+    
+    print("\n📧 Attempting to send email notification...")
     
     try:
         msg = MIMEMultipart('alternative')
@@ -566,15 +578,32 @@ def send_email_notification(success, total_concalls, phones_extracted, sheet_upd
         
         msg.attach(MIMEText(html, 'html'))
         
-        # Send email
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            server.send_message(msg)
+        # Try port 587 with STARTTLS (more reliable than port 465)
+        print("   Connecting to Gmail SMTP (port 587)...")
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=30)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
         
-        print("✅ Email sent!\n")
+        print("   Logging in...")
+        server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         
+        print("   Sending message...")
+        server.send_message(msg)
+        server.quit()
+        
+        print("✅ Email sent successfully!\n")
+        
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ SMTP Authentication Error: {e}")
+        print("   Check: EMAIL_USERNAME and EMAIL_PASSWORD are correct")
+        print("   Make sure you're using an App Password, not your regular Gmail password\n")
+    except smtplib.SMTPException as e:
+        print(f"❌ SMTP Error: {e}\n")
     except Exception as e:
-        print(f"⚠️  Could not send email: {e}\n")
+        print(f"❌ Unexpected error sending email: {type(e).__name__}: {e}\n")
+        import traceback
+        traceback.print_exc()
 
 # ============================================================================
 # MAIN
@@ -675,4 +704,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
