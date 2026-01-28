@@ -2,10 +2,7 @@ name: Daily Concall Scraper
 
 on:
   schedule:
-    # Runs at 7:00 AM IST (1:30 AM UTC) every day
     - cron: '30 1 * * *'
-  
-  # Allow manual trigger
   workflow_dispatch:
 
 jobs:
@@ -21,21 +18,17 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: Install Chrome
-        run: |
-          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
+      - name: Install Chrome and ChromeDriver
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
       
-      - name: Install ChromeDriver
+      - name: Verify Chrome installation
         run: |
-          CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d'.' -f1)
-          CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}")
-          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-          unzip chromedriver_linux64.zip
-          sudo mv chromedriver /usr/local/bin/
-          sudo chmod +x /usr/local/bin/chromedriver
+          which google-chrome
+          google-chrome --version
+          which chromedriver
+          chromedriver --version
       
       - name: Install Python dependencies
         run: |
@@ -51,3 +44,13 @@ jobs:
           GOOGLE_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}
         run: |
           python screener_concall_tracker.py
+      
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-logs
+          path: |
+            *.log
+            *.png
+          retention-days: 7
