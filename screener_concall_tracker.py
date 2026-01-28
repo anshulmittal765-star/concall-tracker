@@ -12,7 +12,6 @@ import base64
 import json
 from datetime import datetime, timedelta
 from io import BytesIO
-import tempfile
 
 # Third-party imports
 from selenium import webdriver
@@ -33,14 +32,6 @@ SCREENER_PASSWORD = os.getenv('SCREENER_PASSWORD')
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID')
 GOOGLE_CREDENTIALS_BASE64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
-
-# Color codes for calendar events
-CALENDAR_COLORS = {
-    'tomato': '11',      # My Stonks
-    'flamingo': '4',     # Core Watchlist
-    'tangerine': '6',    # Core Watchlist
-    'banana': '5'        # Core Watchlist
-}
 
 
 def setup_selenium():
@@ -90,53 +81,118 @@ def scrape_concalls(driver, max_concalls=100):
     print(f"Scraping up to {max_concalls} concalls...")
     
     try:
-        # Navigate to concalls page
-        driver.get('https://www.screener.in/company/concalls/')
-        time.sleep(2)
+        # Navigate to the CORRECT concalls page
+        driver.get('https://www.screener.in/concalls/upcoming/')
+        time.sleep(5)  # Give more time for page to load
         
         concalls = []
         
-        # Find all table rows
-        wait = WebDriverWait(driver, 10)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table.data-table')))
+        # Try multiple possible selectors
+        print("Looking for concall listings...")
         
-        rows = driver.find_elements(By.CSS_SELECTOR, 'table.data-table tbody tr')
+        # Try to find the table or card elements
+        try:
+            # First try: look for table rows
+            rows = driver.find_elements(By.CSS_SELECTOR, 'table tbody tr')
+            if rows:
+                print(f"Found {len(rows)} rows in table")
+            
+            # If no table rows, try card-based layout
+            if not rows:
+                rows = driver.find_elements(By.CSS_SELECTOR, '.concall-card, .card, article')
+                if rows:
+                    print(f"Found {len(rows)} cards")
+            
+            # If still nothing, try any links to company pages
+            if not rows:
+                rows = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/company/"]')
+                if rows:
+                    print(f"Found {len(rows)} company links")
+            
+            if not rows:
+                print("ERROR: Could not find any concall elements on the page")
+                print("Page source preview:")
+                print(driver.page_source[:1000])  # Print first 1000 chars for debugging
+                return []
+            
+        except Exception as e:
+            print(f"Error finding elements: {e}")
+            return []
         
+        # Parse each row/card
         for idx, row in enumerate(rows[:max_concalls]):
             try:
-                cells = row.find_elements(By.TAG_NAME, 'td')
-                
-                if len(cells) < 4:
-                    continue
-                
-                # Extract company name
-                company_elem = cells[0].find_element(By.TAG_NAME, 'a')
-                company_name = company_elem.text.strip()
-                company_url = company_elem.get_attribute('href')
-                
-                # Extract date and time
-                date_text = cells[1].text.strip()
-                time_text = cells[2].text.strip()
-                
-                # Extract PDF link if available
-                pdf_link = None
+                # Try to extract data - this depends on the actual page structure
                 try:
-                    pdf_elem = cells[3].find_element(By.TAG_NAME, 'a')
-                    pdf_link = pdf_elem.get_attribute('href')
-                except NoSuchElementException:
-                    pass
-                
-                concall_data = {
-                    'company': company_name,
-                    'company_url': company_url,
-                    'date': date_text,
-                    'time': time_text,
-                    'pdf_link': pdf_link,
-                    'phone': None
-                }
-                
-                concalls.append(concall_data)
-                print(f"  {idx+1}. {company_name} - {date_text} {time_text}")
+                    # Method 1: Table-based layout
+                    cells = row.find_elements(By.TAG_NAME, 'td')
+                    if len(cells) >= 3:
+                        company_elem = cells[0].find_element(By.TAG_NAME, 'a')
+                        company_name = company_elem.text.strip()
+                        company_url = company_elem.get_attribute('href')
+                        date_text = cells[1].text.strip()
+                        time_text = cells[2].text.strip() if len(cells) > 2 else ""
+                        
+                        # Try to find PDF link
+                        pdf_link = None
+                        try:
+                            pdf_elem = cells[3].find_element(By.TAG_NAME, 'a') if len(cells) > 3 else None
+                            if pdf_elem:
+                                pdf_link = pdf_elem.get_attribute('href')
+                        except:
+                            pass
+                        
+                        concall_data = {
+                            'company': company_name,
+                            'company_url': company_url,
+                            'date': date_text,
+                            'time': time_text,
+                            'pdf_link': pdf_link,
+                            'phone': None
+                        }
+                        concalls.append(concall_data)
+                        print(f"  {idx+1}. {company_name} - {date_text} {time_text}")
+                        continue
+                        
+                except:
+                    # Method 2: Card or link-based layout
+                    text = row.text.strip()
+                    if text:
+                        # Try to extract company name from link
+                        try:
+                            company_link = row.find_element(By.CSS_SELECTOR, 'a[href*="/company/"]')
+                            company_name = company_link.text.strip()
+                            company_url = company_link.get_attribute('href')
+                        except:
+                            company_name = text.split('\n')[0] if '\n' in text else text[:50]
+                            company_url = row.get_attribute('href') if row.tag_name == 'a' else ""
+                        
+                        # Try to extract date/time from text
+                        date_match = re.search(r'\d{1,2}\s+\w+\s+\d{4}', text)
+                        time_match = re.search(r'\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)', text)
+                        
+                        date_text = date_match.group(0) if date_match else ""
+                        time_text = time_match.group(0) if time_match else ""
+                        
+                        # Try to find PDF link
+                        pdf_link = None
+                        try:
+                            pdf_elem = row.find_element(By.CSS_SELECTOR, 'a[href*=".pdf"]')
+                            pdf_link = pdf_elem.get_attribute('href')
+                        except:
+                            pass
+                        
+                        if company_name:
+                            concall_data = {
+                                'company': company_name,
+                                'company_url': company_url,
+                                'date': date_text,
+                                'time': time_text,
+                                'pdf_link': pdf_link,
+                                'phone': None
+                            }
+                            concalls.append(concall_data)
+                            print(f"  {idx+1}. {company_name} - {date_text} {time_text}")
                 
             except Exception as e:
                 print(f"  Error parsing row {idx+1}: {e}")
@@ -147,6 +203,8 @@ def scrape_concalls(driver, max_concalls=100):
         
     except Exception as e:
         print(f"Error scraping concalls: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -171,17 +229,15 @@ def extract_phone_from_pdf(pdf_url):
                     text += page_text + "\n"
         
         # Search for Indian phone numbers
-        # Patterns: +91-XXXXXXXXXX, +91 XXXXXXXXXX, 022-XXXXXXXX, etc.
         phone_patterns = [
-            r'\+91[\s-]?\d{10}',           # +91-9876543210 or +91 9876543210
-            r'\d{3}[\s-]?\d{3}[\s-]?\d{4}', # 022-1234-5678
-            r'\d{4}[\s-]?\d{3}[\s-]?\d{3}', # 1800-123-456
+            r'\+91[\s-]?\d{10}',
+            r'\d{3}[\s-]?\d{3}[\s-]?\d{4}',
+            r'\d{4}[\s-]?\d{3}[\s-]?\d{3}',
         ]
         
         for pattern in phone_patterns:
             matches = re.findall(pattern, text)
             if matches:
-                # Return first match, cleaned up
                 phone = matches[0].strip()
                 print(f"  Found phone: {phone}")
                 return phone
@@ -206,7 +262,7 @@ def process_concalls_with_phones(concalls):
             if phone:
                 success_count += 1
         
-        # Rate limiting - don't hammer the server
+        # Rate limiting
         if idx % 10 == 0 and idx > 0:
             print(f"  Processed {idx}/{len(concalls)} PDFs...")
             time.sleep(1)
@@ -218,11 +274,9 @@ def process_concalls_with_phones(concalls):
 def get_google_credentials():
     """Decode and return Google service account credentials"""
     try:
-        # Decode base64 credentials
         credentials_json = base64.b64decode(GOOGLE_CREDENTIALS_BASE64).decode('utf-8')
         credentials_dict = json.loads(credentials_json)
         
-        # Create credentials object
         creds = Credentials.from_service_account_info(
             credentials_dict,
             scopes=[
@@ -285,19 +339,25 @@ def update_google_sheet(concalls):
         return False
     except Exception as e:
         print(f"Error updating Google Sheet: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
 def parse_concall_datetime(date_str, time_str):
     """Parse concall date and time into datetime object"""
     try:
-        # Example formats: "28 Jan 2026" and "10:00 AM"
         datetime_str = f"{date_str} {time_str}"
         dt = datetime.strptime(datetime_str, "%d %b %Y %I:%M %p")
         return dt
     except Exception as e:
         print(f"  Error parsing datetime '{date_str} {time_str}': {e}")
-        return None
+        # Try alternative formats
+        try:
+            dt = datetime.strptime(datetime_str, "%d %B %Y %I:%M %p")
+            return dt
+        except:
+            return None
 
 
 def create_calendar_events(concalls):
@@ -315,6 +375,7 @@ def create_calendar_events(concalls):
                 # Parse datetime
                 dt = parse_concall_datetime(concall['date'], concall['time'])
                 if not dt:
+                    print(f"  Skipping {concall['company']} - invalid date/time")
                     continue
                 
                 # Create event
@@ -361,6 +422,8 @@ def create_calendar_events(concalls):
         return False
     except Exception as e:
         print(f"Error creating calendar events: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -401,8 +464,8 @@ def main():
             print("No concalls found!")
             sys.exit(0)
         
-        # Step 4: Extract phone numbers from PDFs
-        concalls = process_concalls_with_phones(concalls)
+        # Step 4: Extract phone numbers from PDFs (optional - comment out if too slow)
+        # concalls = process_concalls_with_phones(concalls)
         
         # Step 5: Update Google Sheet
         sheet_success = update_google_sheet(concalls)
