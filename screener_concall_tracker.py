@@ -122,10 +122,21 @@ def scrape_concalls(driver, max_concalls=100):
         # Parse each row/card
         for idx, row in enumerate(rows[:max_concalls]):
             try:
+                # Debug: print what we see in first few rows
+                if idx < 3:
+                    print(f"\nDEBUG Row {idx}: {row.text[:200]}")
+                
                 # Try to extract data - this depends on the actual page structure
                 try:
                     # Method 1: Table-based layout
                     cells = row.find_elements(By.TAG_NAME, 'td')
+                    
+                    # Debug first row
+                    if idx == 0:
+                        print(f"DEBUG: Found {len(cells)} cells in first row")
+                        for i, cell in enumerate(cells[:5]):
+                            print(f"  Cell {i}: {cell.text[:100]}")
+                    
                     if len(cells) >= 3:
                         company_elem = cells[0].find_element(By.TAG_NAME, 'a')
                         company_name = company_elem.text.strip()
